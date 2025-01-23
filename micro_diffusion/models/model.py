@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from composer.models import ComposerModel
 from diffusers import AutoencoderKL
 from easydict import EasyDict
+from tqdm import tqdm
 
 from . import dit as model_zoo
 from .utils import (
@@ -282,7 +283,7 @@ class LatentDiffusion(ComposerModel):
         # Main sampling loop.
         x_next = x.to(torch.float64) * t_steps[0]
         for i, (t_cur, t_next) in enumerate(
-            zip(t_steps[:-1], t_steps[1:])
+            tqdm(zip(t_steps[:-1], t_steps[1:]))
         ):  # 0, ..., N-1
             x_cur = x_next
             # Increase noise temporarily based on the current time step
