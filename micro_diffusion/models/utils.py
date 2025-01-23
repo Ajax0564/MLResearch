@@ -131,9 +131,9 @@ class CrossAttention(nn.Module):
         self, x: torch.Tensor, cond: torch.Tensor, mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         B, N, C = x.shape  # x: (B, N, C)
-        q = self.q_linear(x).reshape(
-            B, N, self.num_heads, self.head_dim
-        )  # q: (B, N, num_heads, head_dim)
+        q = rearrange(
+            self.ln_q(x), "b l (h d) -> b h l d", h=self.num_heads
+        )  # (B, num_heads, N, head_dim)
         kv = self.kv_linear(cond).reshape(
             B, -1, 2, self.num_heads, self.head_dim
         )  # kv: (B, *, 2, num_heads, head_dim)
@@ -216,9 +216,11 @@ class SelfAttention(nn.Module):
     ) -> torch.Tensor:
         B, N, C = x.shape  # x: (B, N, C)
         qkv = self.qkv(x)
-        q, k, v = qkv.unbind(dim=-1)
+        q, k, v = qkv.chunk(3, dim=-1)
 
-        q = rearrange(self.ln_q(q), "b l (h d) -> b h l d", h=self.num_heads)
+        q = rearrange(
+            self.ln_q(q), "b l (h d) -> b h l d", h=self.num_heads
+        )  # (B, num_heads, N, head_dim)
         k = rearrange(self.ln_k(k), "b l (h d) -> b h l d", h=self.num_heads)
         v = rearrange(v, "b l (h d) -> b h l d", h=self.num_heads)
 
