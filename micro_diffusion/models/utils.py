@@ -216,7 +216,7 @@ class SelfAttention(nn.Module):
     ) -> torch.Tensor:
         B, N, C = x.shape  # x: (B, N, C)
         qkv = self.qkv(x)
-        q, k, v = qkv.unbind(2)
+        q, k, v = qkv.unbind(dim=-1)
 
         q = rearrange(self.ln_q(q), "b l (h d) -> b h l d", h=self.num_heads)
         k = rearrange(self.ln_k(k), "b l (h d) -> b h l d", h=self.num_heads)
