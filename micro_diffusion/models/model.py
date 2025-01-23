@@ -50,16 +50,16 @@ class LatentDiffusion(ComposerModel):
         vae: AutoencoderKL,
         text_encoder: UniversalTextEncoder,
         tokenizer: UniversalTokenizer,
-        image_key: str = 'image',
-        text_key: str = 'captions',
-        image_latents_key: str = 'image_latents',
-        text_latents_key: str = 'caption_latents',
+        image_key: str = "image",
+        text_key: str = "captions",
+        image_latents_key: str = "image_latents",
+        text_latents_key: str = "caption_latents",
         precomputed_latents: bool = True,
-        dtype: str = 'bfloat16',
+        dtype: str = "bfloat16",
         latent_res: int = 32,
         p_mean: float = -0.6,
         p_std: float = 1.2,
-        train_mask_ratio: float = 0.
+        train_mask_ratio: float = 0.0,
     ):
         super().__init__()
         self.dit = dit
@@ -71,22 +71,24 @@ class LatentDiffusion(ComposerModel):
         self.precomputed_latents = precomputed_latents
         self.dtype = dtype
         self.latent_res = latent_res
-        self.edm_config = EasyDict({
-            'sigma_min': 0.002,
-            'sigma_max': 80,
-            'P_mean': p_mean,
-            'P_std': p_std,
-            'sigma_data': 0.9,
-            'num_steps': 18,
-            'rho': 7,
-            'S_churn': 0,
-            'S_min': 0,
-            'S_max': float('inf'),
-            'S_noise': 1
-        })
+        self.edm_config = EasyDict(
+            {
+                "sigma_min": 0.002,
+                "sigma_max": 80,
+                "P_mean": p_mean,
+                "P_std": p_std,
+                "sigma_data": 0.9,
+                "num_steps": 18,
+                "rho": 7,
+                "S_churn": 0,
+                "S_min": 0,
+                "S_max": float("inf"),
+                "S_noise": 1,
+            }
+        )
         self.train_mask_ratio = train_mask_ratio
-        self.eval_mask_ratio = 0.  # no masking during sampling/evaluation
-        assert self.train_mask_ratio >= 0, 'Masking ratio must be non-negative!'
+        self.eval_mask_ratio = 0.0  # no masking during sampling/evaluation
+        assert self.train_mask_ratio >= 0, "Masking ratio must be non-negative!"
 
         self.randn_like = torch.randn_like
         self.latent_scale = self.vae.config.scaling_factor
@@ -109,9 +111,11 @@ class LatentDiffusion(ComposerModel):
         else:
             with torch.no_grad():
                 images = batch[self.image_key]
-                latents = self.vae.encode(
-                    images.to(DATA_TYPES[self.dtype])
-                )['latent_dist'].sample().data
+                latents = (
+                    self.vae.encode(images.to(DATA_TYPES[self.dtype]))["latent_dist"]
+                    .sample()
+                    .data
+                )
                 latents *= self.latent_scale
 
         # Get text embeddings
@@ -120,24 +124,24 @@ class LatentDiffusion(ComposerModel):
         else:
             captions = batch[self.text_key]
             captions = captions.view(-1, captions.shape[-1])
-            if 'attention_mask' in batch:
+            if "attention_mask" in batch:
                 conditioning = self.text_encoder.encode(
                     captions,
-                    attention_mask=batch['attention_mask'].view(-1, captions.shape[-1])
+                    attention_mask=batch["attention_mask"].view(-1, captions.shape[-1]),
                 )[0]
             else:
                 conditioning = self.text_encoder.encode(captions)[0]
 
         # Zero out dropped captions. Needed for classifier-free guidance during inference.
-        if 'drop_caption_mask' in batch.keys():
-            conditioning *= batch['drop_caption_mask'].view(
+        if "drop_caption_mask" in batch.keys():
+            conditioning *= batch["drop_caption_mask"].view(
                 [-1] + [1] * (len(conditioning.shape) - 1)
             )
 
         loss = self.edm_loss(
             latents.float(),
             conditioning.float(),
-            mask_ratio=self.train_mask_ratio if self.training else self.eval_mask_ratio
+            mask_ratio=self.train_mask_ratio if self.training else self.eval_mask_ratio,
         )
         return (loss, latents, conditioning)
 
@@ -151,16 +155,17 @@ class LatentDiffusion(ComposerModel):
         **kwargs
     ) -> dict:
         """Wrapper for the model call in EDM (https://github.com/NVlabs/edm/blob/main/training/networks.py#L632)"""
+        # Convert sigma to the same data type as x and reshape it to match the required dimensions
         sigma = sigma.to(x.dtype).reshape(-1, 1, 1, 1)
-        c_skip = (
-            self.edm_config.sigma_data ** 2 /
-            (sigma ** 2 + self.edm_config.sigma_data ** 2)
+        c_skip = self.edm_config.sigma_data**2 / (
+            sigma**2 + self.edm_config.sigma_data**2
         )
         c_out = (
-            sigma * self.edm_config.sigma_data /
-            (sigma ** 2 + self.edm_config.sigma_data ** 2).sqrt()
+            sigma
+            * self.edm_config.sigma_data
+            / (sigma**2 + self.edm_config.sigma_data**2).sqrt()
         )
-        c_in = 1 / (self.edm_config.sigma_data ** 2 + sigma ** 2).sqrt()
+        c_in = 1 / (self.edm_config.sigma_data**2 + sigma**2).sqrt()
         c_noise = sigma.log() / 4
 
         out = model_forward_fxn(
@@ -170,42 +175,46 @@ class LatentDiffusion(ComposerModel):
             mask_ratio=mask_ratio,
             **kwargs
         )
-        F_x = out['sample']
+        F_x = out["sample"]
         c_skip = c_skip.to(F_x.device)
         x = x.to(F_x.device)
         c_out = c_out.to(F_x.device)
         D_x = c_skip * x + c_out * F_x
-        out['sample'] = D_x
+        out["sample"] = D_x
         return out
 
-    def edm_loss(self, x: torch.Tensor, y: torch.Tensor, mask_ratio: float = 0, **kwargs) -> torch.Tensor:
+    def edm_loss(
+        self, x: torch.Tensor, y: torch.Tensor, mask_ratio: float = 0, **kwargs
+    ) -> torch.Tensor:
+        # Generate random normal noise with the same device as input tensor x
         rnd_normal = torch.randn([x.shape[0], 1, 1, 1], device=x.device)
+        # Calculate sigma using the random noise and EDM configuration parameters
         sigma = (rnd_normal * self.edm_config.P_std + self.edm_config.P_mean).exp()
-        weight = (
-            (sigma ** 2 + self.edm_config.sigma_data ** 2) /
-            (sigma * self.edm_config.sigma_data) ** 2
-        )
+        weight = (sigma**2 + self.edm_config.sigma_data**2) / (
+            sigma * self.edm_config.sigma_data
+        ) ** 2
+
+        # Generate noise with the same shape as x and scale it by sigma
         n = self.randn_like(x) * sigma
 
         model_out = self.model_forward_wrapper(
-            x + n,
-            sigma,
-            y,
-            self.dit,
-            mask_ratio=mask_ratio,
-            **kwargs
+            x + n, sigma, y, self.dit, mask_ratio=mask_ratio, **kwargs
         )
-        D_xn = model_out['sample']
+        D_xn = model_out["sample"]
+
+        # Calculate the loss as the weighted mean squared error between the denoised output and the original input
         loss = weight * ((D_xn - x) ** 2)  # (N, C, H, W)
 
         if mask_ratio > 0:
             # Masking is not feasible during image generation as it only returns denoised version
             # for non-masked patches. Image generation requires all patches to be denoised.
             assert (
-                self.dit.training and 'mask' in model_out
-            ), 'Masking is only recommended during training'
+                self.dit.training and "mask" in model_out
+            ), "Masking is only recommended during training"
             loss = F.avg_pool2d(loss.mean(dim=1), self.dit.patch_size).flatten(1)
-            unmask = 1 - model_out['mask']
+            # Get the unmasked regions from the model output
+            unmask = 1 - model_out["mask"]
+            # Calculate the final loss by summing over the unmasked regions and normalizing by the number of unmasked regions
             loss = (loss * unmask).sum(dim=1) / unmask.sum(dim=1)  # (N,)
         return loss.mean()
 
@@ -223,52 +232,70 @@ class LatentDiffusion(ComposerModel):
 
     def get_metrics(self, is_train: bool = False) -> dict:
         # get_metrics expected to return a dict in composer
-        return {'loss': DistLoss()}
+        return {"loss": DistLoss()}
 
     def update_metric(self, batch: dict, outputs: tuple, metric: DistLoss):
         metric.update(outputs[0])
 
     @torch.no_grad()
     def edm_sampler_loop(
-        self, x: torch.Tensor, 
-        y: torch.Tensor, 
-        steps: Optional[int] = None, 
-        cfg: float = 1.0, 
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        steps: Optional[int] = None,
+        cfg: float = 1.0,
         **kwargs
     ) -> torch.Tensor:
+        """
+        Perform EDM (Equilibrium Diffusion Model) sampling loop to generate images.
+        Args:
+            x (torch.Tensor): Input tensor representing the initial state.
+            y (torch.Tensor): Conditional tensor.
+            steps (Optional[int], optional): Number of steps for the sampling loop. Defaults to None.
+            cfg (float, optional): Configuration parameter for the model. Defaults to 1.0.
+            **kwargs: Additional keyword arguments for the model forward function.
+        Returns:
+        torch.Tensor: The generated image tensor after the sampling loop."""
+
         mask_ratio = 0  # no masking during image generation
         model_forward_fxn = (
-            partial(self.dit.forward, cfg=cfg) if cfg > 1.0
-            else self.dit.forward
+            partial(self.dit.forward, cfg=cfg) if cfg > 1.0 else self.dit.forward
         )
 
         # Time step discretization.
         num_steps = self.edm_config.num_steps if steps is None else steps
+        # Create a tensor of step indices
         step_indices = torch.arange(num_steps, dtype=torch.float64, device=x.device)
+        # Calculate the time steps for the sampling loop
         t_steps = (
-            self.edm_config.sigma_max ** (1 / self.edm_config.rho) +
-            step_indices / (num_steps - 1) *
-            (self.edm_config.sigma_min ** (1 / self.edm_config.rho) -
-             self.edm_config.sigma_max ** (1 / self.edm_config.rho))
+            self.edm_config.sigma_max ** (1 / self.edm_config.rho)
+            + step_indices
+            / (num_steps - 1)
+            * (
+                self.edm_config.sigma_min ** (1 / self.edm_config.rho)
+                - self.edm_config.sigma_max ** (1 / self.edm_config.rho)
+            )
         ) ** self.edm_config.rho
+        # Add an extra zero time step at the end
         t_steps = torch.cat([torch.as_tensor(t_steps), torch.zeros_like(t_steps[:1])])
 
         # Main sampling loop.
         x_next = x.to(torch.float64) * t_steps[0]
-        for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])):  # 0, ..., N-1
+        for i, (t_cur, t_next) in enumerate(
+            zip(t_steps[:-1], t_steps[1:])
+        ):  # 0, ..., N-1
             x_cur = x_next
-            # Increase noise temporarily.
+            # Increase noise temporarily based on the current time step
+
             gamma = (
                 min(self.edm_config.S_churn / num_steps, np.sqrt(2) - 1)
-                if self.edm_config.S_min <= t_cur <= self.edm_config.S_max else 0
+                if self.edm_config.S_min <= t_cur <= self.edm_config.S_max
+                else 0
             )
             t_hat = torch.as_tensor(t_cur + gamma * t_cur)
-            x_hat = (
-                x_cur +
-                (t_hat ** 2 - t_cur ** 2).sqrt() *
-                self.edm_config.S_noise *
-                self.randn_like(x_cur)
-            )
+            x_hat = x_cur + (
+                t_hat**2 - t_cur**2
+            ).sqrt() * self.edm_config.S_noise * self.randn_like(x_cur)
 
             # Euler step.
             denoised = self.model_forward_wrapper(
@@ -278,7 +305,7 @@ class LatentDiffusion(ComposerModel):
                 model_forward_fxn,
                 mask_ratio=mask_ratio,
                 **kwargs
-            )['sample'].to(torch.float64)
+            )["sample"].to(torch.float64)
             d_cur = (x_hat - denoised) / t_hat
             x_next = x_hat + (t_next - t_hat) * d_cur
 
@@ -291,7 +318,7 @@ class LatentDiffusion(ComposerModel):
                     model_forward_fxn,
                     mask_ratio=mask_ratio,
                     **kwargs
-                )['sample'].to(torch.float64)
+                )["sample"].to(torch.float64)
                 d_prime = (x_next - denoised) / t_next
                 x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
         return x_next.to(torch.float32)
@@ -309,7 +336,9 @@ class LatentDiffusion(ComposerModel):
         **kwargs
     ) -> torch.Tensor:
         # _check_prompt_given(prompt, tokenized_prompts, prompt_embeds=None)
-        assert prompt or tokenized_prompts, "Must provide either prompt or tokenized prompts"
+        assert (
+            prompt or tokenized_prompts
+        ), "Must provide either prompt or tokenized prompts"
         device = self.vae.device  # hack to identify model device during training
         rng_generator = torch.Generator(device=device)
         if seed:
@@ -318,27 +347,29 @@ class LatentDiffusion(ComposerModel):
         # Convert prompt text to embeddings (zero out embeddings for classifier-free guidance)
         if tokenized_prompts is None:
             out = self.tokenizer.tokenize(prompt)
-            tokenized_prompts = out['input_ids']
-            attention_mask = (
-                out['attention_mask'] if 'attention_mask' in out else None
-            )
+            tokenized_prompts = out["input_ids"]
+            attention_mask = out["attention_mask"] if "attention_mask" in out else None
         text_embeddings = self.text_encoder.encode(
             tokenized_prompts.to(device),
-            attention_mask=attention_mask.to(device) if attention_mask is not None else None
+            attention_mask=(
+                attention_mask.to(device) if attention_mask is not None else None
+            ),
         )[0]
 
         latents = torch.randn(
-            (len(text_embeddings), self.dit.in_channels, self.latent_res, self.latent_res),
+            (
+                len(text_embeddings),
+                self.dit.in_channels,
+                self.latent_res,
+                self.latent_res,
+            ),
             device=device,
             generator=rng_generator,
         )
 
         # iteratively denoise latents
         latents = self.edm_sampler_loop(
-            latents,
-            text_embeddings,
-            num_inference_steps,
-            cfg=guidance_scale
+            latents, text_embeddings, num_inference_steps, cfg=guidance_scale
         )
 
         if return_only_latents:
@@ -351,20 +382,20 @@ class LatentDiffusion(ComposerModel):
         image = (image / 2 + 0.5).clamp(0, 1)
         image = image.float().detach()
         return image
-    
-    
+
+
 def create_latent_diffusion(
-    vae_name: str = 'stabilityai/stable-diffusion-xl-base-1.0',
-    text_encoder_name: str = 'openclip:hf-hub:apple/DFN5B-CLIP-ViT-H-14-378', 
-    dit_arch: str = 'MicroDiT_XL_2',
+    vae_name: str = "stabilityai/stable-diffusion-xl-base-1.0",
+    text_encoder_name: str = "openclip:hf-hub:apple/DFN5B-CLIP-ViT-H-14-378",
+    dit_arch: str = "MicroDiT_XL_2",
     latent_res: int = 32,
     in_channels: int = 4,
     pos_interp_scale: float = 1.0,
-    dtype: str = 'bfloat16',
+    dtype: str = "bfloat16",
     precomputed_latents: bool = True,
     p_mean: float = -0.6,
     p_std: float = 1.2,
-    train_mask_ratio: float = 0.
+    train_mask_ratio: float = 0.0,
 ) -> LatentDiffusion:
     # retrieve max sequence length (s) and token embedding dim (d) from text encoder
     s, d = text_encoder_embedding_format(text_encoder_name)
@@ -373,21 +404,17 @@ def create_latent_diffusion(
         input_size=latent_res,
         caption_channels=d,
         pos_interp_scale=pos_interp_scale,
-        in_channels=in_channels
+        in_channels=in_channels,
     )
 
     vae = AutoencoderKL.from_pretrained(
         vae_name,
-        subfolder=None if vae_name=='ostris/vae-kl-f8-d16' else 'vae',
+        subfolder=None if vae_name == "ostris/vae-kl-f8-d16" else "vae",
         torch_dtype=DATA_TYPES[dtype],
-        pretrained=True
+        pretrained=True,
     )
 
-    text_encoder = UniversalTextEncoder(
-        text_encoder_name,
-        dtype=dtype,
-        pretrained=True
-    )
+    text_encoder = UniversalTextEncoder(text_encoder_name, dtype=dtype, pretrained=True)
     tokenizer = UniversalTokenizer(text_encoder_name)
 
     model = LatentDiffusion(
@@ -400,6 +427,6 @@ def create_latent_diffusion(
         latent_res=latent_res,
         p_mean=p_mean,
         p_std=p_std,
-        train_mask_ratio=train_mask_ratio
+        train_mask_ratio=train_mask_ratio,
     )
     return model
