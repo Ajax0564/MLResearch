@@ -133,12 +133,11 @@ class CrossAttention(nn.Module):
         B, N, C = x.shape  # x: (B, N, C)
         q = self.q_linear(x)
 
-        kv = self.kv_linear(cond).reshape(
-            B, -1, 2, self.num_heads, self.head_dim
-        )  # kv: (B, *, 2, num_heads, head_dim)
-        k, v = kv.unbind(
-            2
-        )  # k: (B, *, num_heads, head_dim), v: (B, *, num_heads, head_dim)
+        kv = self.kv_linear(cond)
+        # .reshape(
+        #     B, -1, 2, self.num_heads, self.head_dim
+        # )  # kv: (B, *, 2, num_heads, head_dim)
+        k, v = kv.chunk(2, dim=-1)  # (B, *, num_heads, head_dim)
 
         q = rearrange(
             self.ln_q(x), "b l (h d) -> b h l d", h=self.num_heads
@@ -151,7 +150,7 @@ class CrossAttention(nn.Module):
 
         x = (
             torch.nn.functional.scaled_dot_product_attention(
-                q.transpose(1, 2),  # q: (B, num_heads, N, head_dim)
+                q,  # q: (B, num_heads, N, head_dim)
                 k.transpose(1, 2),  # k: (B, num_heads, *, head_dim)
                 v.transpose(1, 2),  # v: (B, num_heads, *, head_dim)
                 is_causal=False,
