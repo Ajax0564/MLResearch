@@ -163,12 +163,9 @@ class CrossAttention(nn.Module):
             .contiguous()
         )  # x: (B, N, num_heads, head_dim)
 
-        x = rearrange(
-            x, "b n (h d) -> b n h d", h=self.num_heads
-        )  # x: (B, *, hidden_dim)
+        x = x.view(B, -1, self.num_heads * self.head_dim)  # x: (B, *, hidden_dim)
         x = self.proj(x)  # x: (B, *, dim)
         return x
-        # Rearrange the output back to the original format using einops
 
     def custom_init(self, init_std: float) -> None:
         for linear in (self.q_linear, self.kv_linear):
@@ -215,23 +212,35 @@ class SelfAttention(nn.Module):
         self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         B, N, C = x.shape  # x: (B, N, C)
-        qkv = self.qkv(x)
-        q, k, v = qkv.unbind(2)
+        qkv = self.qkv(x).reshape(
+            B, N, 3, self.num_heads, self.head_dim
+        )  # qkv: (B, N, 3, num_heads, head_dim)
+        q, k, v = qkv.unbind(2)  # q, k, v: (B, N, num_heads, head_dim)
 
-        q = rearrange(self.ln_q(q), "b l (h d) -> b h l d", h=self.num_heads)
-        k = rearrange(self.ln_k(k), "b l (h d) -> b h l d", h=self.num_heads)
-        v = rearrange(v, "b l (h d) -> b h l d", h=self.num_heads)
+        q = (
+            self.ln_q(q.view(B, N, self.num_heads * self.head_dim))
+            .view(B, N, self.num_heads, self.head_dim)
+            .to(q.dtype)
+        )  # q: (B, N, num_heads, head_dim)
+        k = (
+            self.ln_k(k.view(B, N, self.num_heads * self.head_dim))
+            .view(B, N, self.num_heads, self.head_dim)
+            .to(k.dtype)
+        )  # k: (B, N, num_heads, head_dim)
 
-        # Perform scaled dot-product attention
-        attn_output = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=mask, is_causal=False
-        )
+        x = (
+            torch.nn.functional.scaled_dot_product_attention(
+                q.transpose(1, 2),  # q: (B, num_heads, N, head_dim)
+                k.transpose(1, 2),  # k: (B, num_heads, N, head_dim)
+                v.transpose(1, 2),  # v: (B, num_heads, N, head_dim)
+                is_causal=False,
+            )
+            .transpose(1, 2)
+            .contiguous()
+        )  # x: (B, N, num_heads, head_dim)
 
-        # Rearrange the output back to the original format
-        attn_output = rearrange(attn_output, "b h l d -> b l (h d)")
-
-        # Apply the final projection
-        x = self.proj(attn_output)
+        x = x.view(B, N, self.num_heads * self.head_dim)  # x: (B, N, hidden_dim)
+        x = self.proj(x)  # x: (B, N, dim)
         return x
 
     def custom_init(self, init_std: float) -> None:

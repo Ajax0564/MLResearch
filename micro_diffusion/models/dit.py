@@ -2,9 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from timm.models.vision_transformer import PatchEmbed
 from typing import List
-
 from .utils import (
     CaptionProjection,
     CrossAttention,
