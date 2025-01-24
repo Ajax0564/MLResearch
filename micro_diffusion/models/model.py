@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from composer.models import ComposerModel
+
 from diffusers import AutoencoderKL
 from easydict import EasyDict
 from tqdm import tqdm
@@ -20,7 +20,7 @@ from .utils import (
 )
 
 
-class LatentDiffusion(ComposerModel):
+class LatentDiffusion(nn.Module):
     """Latent diffusion model that generates images from text prompts.
 
     This model combines a DiT (Diffusion Transformer) model for denoising image latents,
@@ -230,13 +230,6 @@ class LatentDiffusion(ComposerModel):
             return outputs
         loss, _, _ = self.forward(batch)
         return loss, None, None
-
-    def get_metrics(self, is_train: bool = False) -> dict:
-        # get_metrics expected to return a dict in composer
-        return {"loss": DistLoss()}
-
-    def update_metric(self, batch: dict, outputs: tuple, metric: DistLoss):
-        metric.update(outputs[0])
 
     @torch.no_grad()
     def edm_sampler_loop(

@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from torchmetrics import Metric
 
 import open_clip
 from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokenizer
@@ -133,38 +132,24 @@ class CrossAttention(nn.Module):
         B, N, C = x.shape  # x: (B, N, C)
         q = self.q_linear(x)
 
+        # 8, 1, 77, 1024 cond.size()
         kv = self.kv_linear(cond)
-        # .reshape(
-        #     B, -1, 2, self.num_heads, self.head_dim
-        # )  # kv: (B, *, 2, num_heads, head_dim)
-        k, v = kv.chunk(2, dim=-1)  # (B, *, num_heads, head_dim)
 
-        q = rearrange(
-            self.ln_q(x), "b l (h d) -> b h l d", h=self.num_heads
-        )  # (B, num_heads, N, head_dim)
-        k = (
-            self.ln_k(k.view(B, -1, self.num_heads * self.head_dim))
-            .view(B, -1, self.num_heads, self.head_dim)
-            .to(k.dtype)
-        )  # k: (B, *, num_heads, head_dim)
+        k, v = kv.chunk(2, dim=-1)
 
-        x = (
-            torch.nn.functional.scaled_dot_product_attention(
-                q,  # q: (B, num_heads, N, head_dim)
-                k.transpose(1, 2),  # k: (B, num_heads, *, head_dim)
-                v.transpose(1, 2),  # v: (B, num_heads, *, head_dim)
-                is_causal=False,
-            )
-            .transpose(1, 2)
-            .contiguous()
-        )  # x: (B, N, num_heads, head_dim)
+        q = rearrange(self.ln_q(q), "b l (h d) -> b h l d", h=self.num_heads)
+        k = rearrange(self.ln_k(k), "b 1 l (h d) -> b h l d", h=self.num_heads).to(
+            k.dtype
+        )
 
-        x = rearrange(
-            x, "b n (h d) -> b n h d", h=self.num_heads
-        )  # x: (B, *, hidden_dim)
-        x = self.proj(x)  # x: (B, *, dim)
+        v = rearrange(v, "b 1 l (h d) -> b h l d", h=self.num_heads)
+
+        x = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False)
+
+        x = rearrange(x, "b h l d -> b l (h d)")
+
+        x = self.proj(x)
         return x
-        # Rearrange the output back to the original format using einops
 
     def custom_init(self, init_std: float) -> None:
         for linear in (self.q_linear, self.kv_linear):
@@ -388,7 +373,7 @@ def get_2d_sincos_pos_embed(
     grid = np.meshgrid(
         grid_w, grid_h
     )  # shape: [(grid_size[1], grid_size[0]), (grid_size[1], grid_size[0])]
-    grid = np.stack(grid, axis=0)  # shape: (2, grid_size[1], grid_size[0])
+    grid = np.stack(grid, axis=0)
     grid = grid.reshape(
         [2, 1, grid_size[1], grid_size[0]]
     )  # shape: (2, 1, grid_size[1], grid_size[0])
@@ -659,23 +644,3 @@ def _cast_if_autocast_enabled(tensor: torch.Tensor) -> torch.Tensor:
             raise NotImplementedError()
         return tensor.to(dtype=dtype)
     return tensor
-
-
-class DistLoss(Metric):
-    """Distributed loss metric.
-
-    Args:
-        kwargs (Any): Additional arguments passed to parent class
-    """
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.add_state("loss", default=torch.tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("batches", default=torch.tensor(0), dist_reduce_fx="sum")
-
-    def update(self, value: torch.Tensor) -> None:
-        self.loss += value
-        self.batches += 1
-
-    def compute(self) -> torch.Tensor:
-        return self.loss.float() / self.batches
