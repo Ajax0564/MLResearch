@@ -134,6 +134,10 @@ class LatentDiffusion(nn.Module):
                 conditioning = self.text_encoder.encode(captions)[0]
 
         # Zero out dropped captions. Needed for classifier-free guidance during inference.
+        # We replace caption embeddings with a zero vector in cfg guidance.
+        # out["drop_caption_mask"] = 0.0 if torch.rand(1) < self.cap_drop_prob else 1.0
+        # cap_drop_prob: float = (0.0,)
+
         if "drop_caption_mask" in batch.keys():
             conditioning *= batch["drop_caption_mask"].view(
                 [-1] + [1] * (len(conditioning.shape) - 1)
